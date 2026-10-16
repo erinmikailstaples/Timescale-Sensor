@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<patchboard>
+  <settings>
+    <input><type>EmotiBit</type></input>
+    <output>
+      <type>OSC</type>
+      <ipAddress>127.0.0.1</ipAddress>
+      <port>12345</port>
+    </output>
+  </settings>
+  <patchcords>
+    <patch><input>EA</input><output>/emotibit/eda</output></patch>
+  </patchcords>
+</patchboard>
