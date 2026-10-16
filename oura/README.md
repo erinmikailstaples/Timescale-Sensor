@@ -1,13 +1,14 @@
 # Read Oura Ring Data
 
 Read your synced health data from the [Oura API v2](https://cloud.ouraring.com/v2/docs)
-and print or save it as JSON.
+and print or save it as JSON, with optional upload to Tiger Cloud.
 
 ## Overview
 
 This is a read-only, on-demand cloud reader, not a Bluetooth connection or a live
 sensor stream. Sync your ring in the Oura app before fetching sleep data.
-It does not send anything to Tiger Cloud or change your Oura records.
+The reader does not change your Oura records or send data to Tiger Cloud.
+Use the separate Python uploader below when you want to store an export there.
 
 The script follows pagination and preserves the API's full response fields.
 Daily scores and detailed sleep are fetched by default; other data types are opt-in.
@@ -17,6 +18,9 @@ Daily scores and detailed sleep are fetched by default; other data types are opt
 | [read_oura.py](read_oura.py) | Command-line data reader |
 | [.env.example](.env.example) | OAuth access-token template |
 | [test_read_oura.py](test_read_oura.py) | Offline API contract tests |
+| [setup_schema.py](setup_schema.py) | Python schema and index setup for Tiger Cloud |
+| [export_to_tiger.py](export_to_tiger.py) | Transactional, repeatable JSON uploads |
+| [test_export_to_tiger.py](test_export_to_tiger.py) | Offline schema, credential, and upload tests |
 
 ## Getting Started
 
@@ -152,6 +156,101 @@ to daily records in Oura's date semantics; heart rate and battery windows use
 UTC from the start day's midnight through the end day's final microsecond.
 Personal information and ring configuration have no date filter.
 
+## Step 3: Create the Tiger Cloud Schema
+
+The Python setup script uses `DATABASE_URL` from your environment or `oura/.env`
+when set. Otherwise it reads the `Service URL` in the repository-root
+`tiger-cloud-credentials.txt` supplied with this project. That file is gitignored;
+do not commit it, paste its contents into commands, or copy its password into scripts.
+Both database scripts require TLS (`sslmode=require` or certificate verification).
+
+**Create the table and indexes** - Run this once before uploading; rerunning is safe:
+
+```bash
+uv run python oura/setup_schema.py
+```
+
+Expect `Done: Oura table and indexes are ready in Tiger Cloud.` The database
+account needs permission to create tables and indexes. If connecting fails,
+check the service's allowed IPs, credentials, and network access. To move the
+credentials file, pass `--credentials-file /private/path/credentials.txt` to
+either script. A configured `DATABASE_URL` still takes precedence.
+
+The `oura_record` table preserves each full Oura object in a `payload` JSONB
+column. JSONB lets PostgreSQL query nested fields without discarding measurements
+that vary by endpoint. Indexed columns support common participant/type/date queries:
+
+| Column | Meaning |
+| --- | --- |
+| `participant_id` | Your stable local alias, not a name or email |
+| `data_type` | Oura collection name, such as `sleep` or `heartrate` |
+| `record_key` | Stable import identity within participant and collection |
+| `record_date` | Oura `day` or `start_day`, when present |
+| `recorded_at` | `timestamp`, `bedtime_start`, or `start_datetime`, when present |
+| `payload` | Full, unchanged Oura record as JSONB |
+| `imported_at` | Time the row was inserted or its payload last changed |
+
+This is a normal PostgreSQL table, supported by Tiger Cloud. It is intentionally
+not a hypertable: configuration and personal-info records have no observation
+time, and Oura daily dates should not be replaced with artificial timestamps.
+It does not change the project's separate EmotiBit table. Next, validate and
+upload your saved JSON.
+
+## Step 4: Upload an Export to Tiger Cloud
+
+Use the JSON saved in Step 2. This command does not call Oura or need an Oura
+token. Keep the same participant alias for every export from the same account;
+use a different alias for another person, since the file has no account wrapper.
+
+**Validate without connecting** - Check records and keys before uploading:
+
+```bash
+uv run python oura/export_to_tiger.py oura/exports/week.json \
+  --participant participant-01 --dry-run
+```
+
+Expect `Dry run: validated ... records; no database connection made.` This checks
+JSON structure, supported collections, dates, timezone-aware timestamps, and
+finite numeric values. It does not verify database access.
+
+**Upload the validated file** - Insert new records and update changed records in one transaction:
+
+```bash
+uv run python oura/export_to_tiger.py oura/exports/week.json \
+  --participant participant-01
+```
+
+Expect a count of processed and inserted/updated rows. A database error rolls
+back the whole upload. Repeating an unchanged file with the same alias changes
+zero rows. No records are deleted if absent from a later export.
+
+The primary key combines participant, data type, and record identity. Identity
+uses Oura's record `id` when available, a fixed key for `personal_info`, or UTC
+timestamp plus `source` for heart-rate and battery records. Other ID-less
+records use a canonical JSON hash: identical objects deduplicate, but changed
+objects are retained as new snapshots rather than replacing an uncertain match.
+
+**Verify in Tiger Cloud's SQL editor** - Count stored records and inspect daily sleep scores:
+
+```sql
+SELECT data_type, count(*) AS records
+FROM oura_record
+WHERE participant_id = 'participant-01'
+GROUP BY data_type
+ORDER BY data_type;
+
+SELECT record_date, (payload ->> 'score')::integer AS sleep_score
+FROM oura_record
+WHERE participant_id = 'participant-01' AND data_type = 'daily_sleep'
+ORDER BY record_date DESC
+LIMIT 14;
+```
+
+Counts should match the unique records you uploaded; sleep scores appear only
+if the export included `daily_sleep`. Full payloads may include identifying
+personal information even when the participant alias is opaque. Restrict database
+access and collect only the fields/data types you have consent to store.
+
 ## Going Further
 
 ### Refresh an Expired Token
@@ -174,6 +273,16 @@ uv run python -m unittest discover -s oura -p 'test_read_oura.py' -v
 All tests should pass. They check query filters, pagination, empty responses,
 and common API errors using mocked HTTP responses.
 
+**Test the entire Oura workflow offline** - Include the database uploader and schema checks:
+
+```bash
+uv run python -m unittest discover -s oura -p 'test_*.py' -v
+```
+
+Expect passing tests without a database connection or real credentials. Tests
+cover repeatable keys, full payload preservation, validation, parameterized SQL,
+dry runs, and credential-safe errors.
+
 ## Current Limitations
 
 - **Not live data:** results depend on ring/app sync and Oura processing.
@@ -182,14 +291,17 @@ and common API errors using mocked HTTP responses.
 - **Token expiry:** a 401 requires refreshing the token or authorizing again.
 - **Rate limits:** a 429 reports `Retry-After`; the script exits without retrying.
 - **On-demand export:** all pages are held in memory. Use smaller date ranges
-  for large histories. No database ingestion or webhook service is included.
+  for large histories. Uploads also validate the whole JSON file in memory;
+  scheduling, streaming, and webhooks are not included.
+- **Schema evolution:** setup creates missing tables/indexes; it is not a migration
+  tool for an older incompatible table. Uploads do not remove stale source records.
 - **Health privacy:** exports are sensitive, and these metrics are not diagnoses.
 
 ## What's Next
 
 - Expand from seven days to a month of history with explicit date filters.
 - Add another consented data type, such as workouts or SpO2.
-- Load selected records into Tiger Cloud using a purpose-built schema.
+- Query selected JSONB metrics in Tiger Cloud or build an access-controlled dashboard.
 - Use Oura webhooks for ongoing updates instead of repeated full-history polling.
 
 ## Resources
