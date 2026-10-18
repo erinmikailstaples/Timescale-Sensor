@@ -109,6 +109,10 @@ class ExportToTigerTests(unittest.TestCase):
         create_schema(connection)
         cursor.execute.assert_called_once_with(SCHEMA_SQL)
         self.assertIn("CREATE TABLE IF NOT EXISTS", SCHEMA_SQL)
+        self.assertIn("oura_sync_run", SCHEMA_SQL)
+        self.assertIn("oura_record_version", SCHEMA_SQL)
+        self.assertIn("oura_sync_cursor", SCHEMA_SQL)
+        self.assertIn("jsonb_path_ops", SCHEMA_SQL)
 
     @patch("setup_schema.load_dotenv")
     @patch.dict("os.environ", {}, clear=True)

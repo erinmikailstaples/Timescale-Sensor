@@ -20,6 +20,19 @@ from psycopg.conninfo import conninfo_to_dict
 
 DEFAULT_CREDENTIALS = Path(__file__).resolve().parents[1] / "tiger-cloud-credentials.txt"
 SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS oura_sync_run (
+    sync_run_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    participant_id text NOT NULL CHECK (participant_id <> ''),
+    started_at timestamptz NOT NULL DEFAULT now(),
+    completed_at timestamptz,
+    requested_start_date date,
+    requested_end_date date,
+    status text NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'completed', 'partial', 'failed')),
+    endpoint_counts jsonb NOT NULL DEFAULT '{}'::jsonb,
+    errors jsonb NOT NULL DEFAULT '{}'::jsonb
+);
+
 CREATE TABLE IF NOT EXISTS oura_record (
     participant_id text NOT NULL CHECK (participant_id <> ''),
     data_type text NOT NULL CHECK (data_type <> ''),
@@ -27,14 +40,56 @@ CREATE TABLE IF NOT EXISTS oura_record (
     record_date date,
     recorded_at timestamptz,
     payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
+    first_imported_at timestamptz NOT NULL DEFAULT now(),
     imported_at timestamptz NOT NULL DEFAULT now(),
+    sync_run_id bigint REFERENCES oura_sync_run(sync_run_id) ON DELETE SET NULL,
+    source_deleted_at timestamptz,
     PRIMARY KEY (participant_id, data_type, record_key)
 );
+ALTER TABLE oura_record
+    ADD COLUMN IF NOT EXISTS first_imported_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE oura_record
+    ADD COLUMN IF NOT EXISTS sync_run_id bigint REFERENCES oura_sync_run(sync_run_id) ON DELETE SET NULL;
+ALTER TABLE oura_record
+    ADD COLUMN IF NOT EXISTS source_deleted_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS oura_record_version (
+    participant_id text NOT NULL CHECK (participant_id <> ''),
+    data_type text NOT NULL CHECK (data_type <> ''),
+    record_key text NOT NULL CHECK (record_key <> ''),
+    payload_hash text NOT NULL CHECK (payload_hash <> ''),
+    record_date date,
+    recorded_at timestamptz,
+    payload jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object'),
+    observed_at timestamptz NOT NULL DEFAULT now(),
+    sync_run_id bigint REFERENCES oura_sync_run(sync_run_id) ON DELETE SET NULL,
+    PRIMARY KEY (participant_id, data_type, record_key, payload_hash)
+);
+
+CREATE TABLE IF NOT EXISTS oura_sync_cursor (
+    participant_id text NOT NULL CHECK (participant_id <> ''),
+    data_type text NOT NULL CHECK (data_type <> ''),
+    through_date date NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (participant_id, data_type)
+);
+
 CREATE INDEX IF NOT EXISTS oura_record_date_idx
     ON oura_record (participant_id, data_type, record_date DESC);
 CREATE INDEX IF NOT EXISTS oura_record_time_idx
     ON oura_record (participant_id, data_type, recorded_at DESC)
     WHERE recorded_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS oura_record_payload_idx
+    ON oura_record USING gin (payload jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS oura_record_version_observed_idx
+    ON oura_record_version (participant_id, data_type, observed_at DESC);
+
+CREATE OR REPLACE VIEW oura_daily_scores AS
+SELECT participant_id, data_type, record_date,
+       NULLIF(payload ->> 'score', '')::double precision AS score,
+       payload, imported_at
+FROM oura_record
+WHERE record_date IS NOT NULL AND payload ? 'score' AND source_deleted_at IS NULL;
 """
 
 

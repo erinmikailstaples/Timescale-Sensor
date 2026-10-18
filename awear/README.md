@@ -13,6 +13,40 @@ density (PSD) to describe the signal. PSD measures how signal power is distribut
 across frequencies. The script reports a frequency peak and conventional band
 percentages, not emotions, attention, sleep stages, diagnoses, or brain locations.
 
+This workflow has two separate parts:
+
+1. **Export:** copy a bounded recording window from AWEAR's cloud into a local
+   CSV or JSONL file.
+2. **Analyze:** read that local file, calculate a descriptive frequency summary,
+   and optionally create a PNG image.
+
+Exporting does not automatically analyze or upload data. Analyzing does not call
+the AWEAR API or change the source recording.
+
+For a guided five-minute export and analysis exercise, complete
+[`TUTORIAL.md`](TUTORIAL.md). Use this README as the detailed command,
+limitation, and troubleshooting reference.
+
+## Terms Used in This Guide
+
+- **EEG:** electroencephalography, a measurement of electrical activity recorded
+  at the scalp.
+- **API:** a web interface through which this code requests authorized data from
+  AWEAR.
+- **API key:** a secret that identifies and authorizes the research group.
+- **Participant ID:** an opaque AWEAR identifier. It is safer than a name but is
+  still linkable information and must be protected.
+- **Recording window:** an explicit start and end time requested from the API.
+- **CSV:** a table stored as comma-separated text. This export uses one waveform
+  sample per column.
+- **JSONL:** newline-delimited JSON. This export stores one record, including its
+  waveform array, on each line.
+- **MNE:** a Python toolkit for processing neurophysiology data.
+- **Power spectral density (PSD):** a calculation describing how signal power is
+  distributed across frequencies.
+- **Sampling rate:** the number of waveform samples measured per second. These
+  exports are expected to contain 256 samples per second.
+
 | File | Purpose |
 |---|---|
 | [fetch_data.py](fetch_data.py) | Authenticated API access and CSV/JSONL export |
@@ -53,6 +87,10 @@ Help should list `members`, `usage`, and `data`. If `uv` is not found after
 installation, open a new terminal or use `~/.local/bin/uv` on macOS/Linux.
 Use `uv add PACKAGE` for future dependency changes. Next, configure API access.
 
+What this step changes: `uv sync --locked` creates or updates the repository's
+private `.venv` with the exact dependencies in `uv.lock`. The `--help` command
+only prints instructions. Neither command contacts AWEAR or downloads EEG.
+
 ## Step 1: Configure Authentication
 
 **Create local configuration** - Copy the template, then edit the resulting
@@ -67,6 +105,10 @@ Never put the key in source code, shell commands, or shared logs. `.env` files
 are gitignored. For another location, place `--env-file /path/to/awear.env`
 before the subcommand. Now discover the participant you want to export.
 
+What this step changes: it creates a private local configuration file and you
+place the key in it. Copying the template does not test the key or make an API
+request. The first real authentication test happens in Step 2.
+
 ## Step 2: Find Your Participant
 
 **List active members** - Retrieve opaque participant IDs, not email addresses:
@@ -78,6 +120,14 @@ uv run python awear/fetch_data.py members
 Expect JSON with `members`, `count`, and IDs such as `P-A1B2C3`. Use an actual
 returned ID below. A participant may have multiple recording devices; normal
 API access returns only rows from your group's subscribed devices.
+
+What this command does: it authenticates with the configured key and asks AWEAR
+for the active participants visible to the research group. It prints the result
+but does not create a file or download waveform samples.
+
+Success looks like valid JSON and a nonnegative `count`. A count of zero means
+authentication worked but no active members are currently available to this
+key; check the group, agreement, and device subscription before Step 3.
 
 ## Step 3: Export a Short Window
 
@@ -108,6 +158,16 @@ The destination directory must exist, and existing files are not overwritten.
 An empty window produces a header-only CSV or empty JSONL. Failures remove the
 temporary export; forced termination may leave a hidden `.part` file to delete.
 
+What the two commands change: `mkdir -p` creates the ignored local export
+directory if it does not exist. `fetch_data.py data` makes one or more metered
+API requests, validates each page, and creates the requested output file only
+after the export completes. It does not analyze the waveform or write to Tiger
+Cloud.
+
+Why start with five minutes: a narrow known window limits cost, waiting time,
+memory use, and the amount of sensitive data created while setup is still being
+verified. After confirming the file, expand the window deliberately.
+
 **What export is good at:** bounded, repeatable downloads for offline analysis.
 **Where it falls short:** no live streaming, automatic resume, or database loading.
 Next, check units and analyze one contiguous device recording.
@@ -131,6 +191,17 @@ Expect a JSON report and a PNG showing the first ten seconds and the spectrum.
 Omit `--plot` to produce only the JSON report; it does not require a GUI. The
 plot filename must be new. Shell redirection can overwrite a summary file, so
 choose summary filenames carefully and check the command's exit status.
+
+What this command changes: it reads the existing CSV, writes the optional PNG,
+and sends the JSON summary to standard output. The `>` operator is handled by
+the shell and creates or replaces `eeg-summary.json`; it can overwrite an
+existing file without asking. The command makes no AWEAR request and no database
+write.
+
+Success looks like both files existing, a JSON object in the summary, and a PNG
+containing a short waveform panel and a spectrum panel. Review the plot for
+obvious clipping, large motion artifacts, flat signal, or unexpected gaps before
+interpreting the frequency percentages.
 
 The script requires at least four ordered, contiguous one-second records from
 one participant and one device. It rejects gaps, duplicate/overlapping records,
@@ -174,6 +245,10 @@ uv run python awear/fetch_data.py usage
 
 Expect `general` and `raw_data` usage. For future window discovery, the supplied
 API also documents member `stats` and `sessions`; those are not CLI commands here.
+
+This command contacts AWEAR but does not request waveform data or change the
+account. Use it before and after larger exports to understand the usage reported
+by the service.
 
 **Run offline tests** - Validate exports and analyze a known synthetic 10 Hz signal:
 
@@ -219,4 +294,4 @@ should peak at 10 Hz with over 99% of its band power in alpha.
 - [MNE RawArray](https://mne.tools/stable/generated/mne.io.RawArray.html) - Constructing recordings from arrays.
 - [AWEAR](https://awearlabs.com/) - Account access and source of the supplied API documentation.
 - [uv documentation](https://docs.astral.sh/uv/) - Environment and package management.
-- [Project overview](../README.md) - The separate EmotiBit EDA workflow.
+- [Project overview](../README.md) - Choose among the EmotiBit, AWEAR, and Oura workflows.

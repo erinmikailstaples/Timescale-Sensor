@@ -21,10 +21,21 @@ API_URL = "https://api.ouraring.com/v2/usercollection"
 ENDPOINTS = (
     "daily_activity", "daily_sleep", "daily_readiness", "sleep", "heartrate",
     "daily_spo2", "daily_stress", "daily_resilience", "daily_cardiovascular_age",
-    "vO2_max", "workout", "session", "enhanced_tag", "sleep_time",
+    "vO2_max", "workout", "session", "tag", "enhanced_tag", "sleep_time",
     "rest_mode_period", "ring_configuration", "ring_battery_level", "personal_info",
 )
 DEFAULT_ENDPOINTS = ("daily_sleep", "daily_readiness", "daily_activity", "sleep")
+
+
+class OuraAPIError(RuntimeError):
+    """An Oura response error with status metadata for retries and scope skips."""
+
+    def __init__(self, endpoint: str, status_code: int, message: str,
+                 retry_after: str | None = None) -> None:
+        super().__init__(message)
+        self.endpoint = endpoint
+        self.status_code = status_code
+        self.retry_after = retry_after
 
 
 def query_params(endpoint: str, start: date, end: date) -> dict[str, str]:
@@ -59,7 +70,12 @@ def fetch_data(session: requests.Session, endpoint: str, start: date, end: date)
             hint = hints.get(response.status_code, "Check the endpoint and query parameters.")
             if response.status_code == 429:
                 hint += f" Retry-After: {response.headers.get('Retry-After', 'not provided')} seconds."
-            raise RuntimeError(f"{endpoint}: HTTP {response.status_code}. {hint}")
+            raise OuraAPIError(
+                endpoint,
+                response.status_code,
+                f"{endpoint}: HTTP {response.status_code}. {hint}",
+                response.headers.get("Retry-After"),
+            )
         payload = response.json()
         if not isinstance(payload, dict):
             raise ValueError(f"{endpoint}: expected a JSON object.")
