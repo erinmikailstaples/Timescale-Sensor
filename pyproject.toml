@@ -1,6 +1,7 @@
 [project]
 name = "timescale-sensor"
 version = "0.1.0"
+license = { file = "LICENSE" }
 description = "EmotiBit EDA collection and AWEAR EEG export and analysis"
 requires-python = ">=3.11"
 dependencies = [

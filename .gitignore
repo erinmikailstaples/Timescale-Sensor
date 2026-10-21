@@ -6,3 +6,6 @@ __pycache__/
 awear/exports/
 *.part
 tiger-cloud-credentials.txt
+
+.DS_Store
+examples/output/

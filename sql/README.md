@@ -2,7 +2,12 @@
 
 [`schema.sql`](schema.sql) creates the Tiger Cloud database objects used by
 `bridge/bridge.py`. It belongs only to the EmotiBit EDA workflow. Oura uses
-different tables created by `oura/setup_schema.py`.
+different tables created by `oura/setup_schema.py`, and AWEAR EEG uses
+[`awear_schema.sql`](awear_schema.sql), which `awear/upload_to_tiger.py` can
+apply for you with `--create-schema`.
+
+For ready-made queries against the EmotiBit table, see
+[`examples/queries.sql`](../examples/queries.sql).
 
 For a guided exercise that creates the schema, writes simulated rows, verifies
 them, and cleans them up, complete [`TUTORIAL.md`](TUTORIAL.md). Use this README
@@ -47,9 +52,25 @@ reduces exposure of the database over the internet.
 
 ## Step 2: Run the Schema
 
+Pick whichever of these three is easiest for you. They do the same thing.
+
+**Option A, from Python** (after Step 3 below puts `DATABASE_URL` in `.env`):
+
+```bash
+uv run python sql/setup_schema.py
+```
+
+**Option B, with the Tiger CLI:**
+
+```bash
+tiger db query --file sql/schema.sql
+```
+
+**Option C, by hand:**
+
 1. Open [`schema.sql`](schema.sql).
 2. Copy its entire contents.
-3. Paste them into Tiger Cloud’s SQL editor.
+3. Paste them into Tiger Cloud's SQL editor.
 4. Run the SQL.
 
 What this changes: it creates one table, converts it to a hypertable, creates one

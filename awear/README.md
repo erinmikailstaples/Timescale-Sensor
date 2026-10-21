@@ -51,6 +51,8 @@ limitation, and troubleshooting reference.
 |---|---|
 | [fetch_data.py](fetch_data.py) | Authenticated API access and CSV/JSONL export |
 | [analyze_eeg.py](analyze_eeg.py) | MNE analysis, JSON summary, and optional PNG |
+| [upload_to_tiger.py](upload_to_tiger.py) | Loads an export into the `eeg_record` table in Tiger Cloud |
+| [../sql/awear_schema.sql](../sql/awear_schema.sql) | Creates `eeg_record` and its coverage view |
 | [.env.example](.env.example) | API-key template |
 | [test_fetch_data.py](test_fetch_data.py) | Mocked API tests, no paid requests |
 | [test_analyze_eeg.py](test_analyze_eeg.py) | Synthetic-signal analysis tests |
@@ -235,6 +237,118 @@ frequency content across comparable recordings.
 tutorial's multi-channel ICA, scalp maps, source localization, or event-related
 analysis without additional sensors, metadata, and experimental event markers.
 
+
+## Step 5: Upload the Export to Tiger Cloud
+
+Exporting gives you a local file. This step copies that file into a database so
+you can query it with SQL, join it with other sensors by time, and keep it long
+term.
+
+```text
+AWEAR cloud -> fetch_data.py -> eeg.csv -> upload_to_tiger.py -> eeg_record (Tiger Cloud)
+```
+
+### How the data is stored
+
+Each AWEAR record is one second of EEG containing 256 samples. The uploader
+keeps that shape: **one database row per second**, with the 256 samples in an
+array column called `waveform`. An hour of EEG becomes 3,600 rows instead of
+921,600, which keeps uploads fast and the table small. The schema is in
+[`sql/awear_schema.sql`](../sql/awear_schema.sql).
+
+| Column | Meaning |
+|---|---|
+| `time` | start of the one-second record, UTC |
+| `participant_id` | the opaque `P-XXXXXX` ID |
+| `device_id` | the AWEAR device |
+| `channel` | `TP10` (the only channel in these exports) |
+| `sampling_rate` | `256` |
+| `unit` | `V`, `mV`, or `uV`, whatever you pass with `--units` |
+| `waveform` | array of 256 numbers |
+| `metadata` | source file name and upload time |
+
+The table has a uniqueness rule on time, participant, device, and channel.
+Uploading the same file twice adds nothing the second time; the script reports
+how many rows were already present.
+
+### 5a. Add the database URL
+
+The uploader needs `DATABASE_URL`. Add one line to `awear/.env` (or use the
+repository's root `.env`, which it also checks):
+
+```dotenv
+DATABASE_URL=postgres://USER:PASSWORD@HOST:PORT/tsdb?sslmode=require
+```
+
+Copy it from the **Connect** panel of your Tiger Cloud service.
+
+### 5b. Preview
+
+```bash
+uv run python awear/upload_to_tiger.py awear/exports/eeg.csv --units uV
+```
+
+Without `--write`, nothing is sent. You get a JSON summary with the record
+count, participant, device, and time span. Check that there is exactly one
+participant and that the units match what AWEAR confirmed.
+
+### 5c. Create the table and upload
+
+```bash
+uv run python awear/upload_to_tiger.py awear/exports/eeg.csv --units uV --create-schema --write
+```
+
+`--create-schema` runs `sql/awear_schema.sql` for you and is safe to repeat.
+After the first upload you can leave it off.
+Equivalent alternatives: `uv run python sql/setup_schema.py --awear` or
+`tiger db query --file sql/awear_schema.sql`.
+
+Success looks like: `done; new_rows=N already_present=0`.
+
+### 5d. Verify in the SQL editor
+
+How much EEG is stored, per hour:
+
+```sql
+SELECT bucket, participant_id, seconds_recorded
+FROM eeg_coverage_1h
+ORDER BY bucket DESC
+LIMIT 24;
+```
+
+Expand one minute into individual samples (the `unnest` trick):
+
+```sql
+SELECT r.time + ((u.i - 1) * interval '1 second' / r.sampling_rate) AS sample_time,
+       u.v AS value
+FROM eeg_record AS r
+CROSS JOIN LATERAL unnest(r.waveform) WITH ORDINALITY AS u(v, i)
+WHERE r.participant_id = 'P-A1B2C3'
+  AND r.time >= '2026-10-15T09:00:00Z' AND r.time < '2026-10-15T09:01:00Z'
+ORDER BY sample_time;
+```
+
+Both are read-only. The second returns 15,360 rows for one minute, so keep the
+window short in the web editor.
+
+### Removing an upload
+
+Preview first, then delete only what you intend:
+
+```sql
+SELECT count(*) FROM eeg_record WHERE metadata->>'source' = 'eeg.csv';
+DELETE FROM eeg_record WHERE metadata->>'source' = 'eeg.csv';
+```
+
+### Troubleshooting the upload
+
+- **`relation "eeg_record" does not exist`:** add `--create-schema`.
+- **`Upload one participant at a time`:** the export mixes participants. Export
+  each one to its own file.
+- **`DATABASE_URL missing`:** add it to `awear/.env` or the root `.env`.
+- **Connection refused or SSL error:** keep `sslmode=require`, check the
+  service's allowed-IP list, and confirm the service is running.
+
 ## Going Further
 
 **Check request usage** - Inspect API-key request buckets, not monthly GB allowance:
@@ -286,7 +400,7 @@ should peak at 10 Hz with over 99% of its band power in alpha.
 - Export additional consented participants into separate files.
 - Compare consistent, artifact-reviewed recording windows rather than assigning mental-state labels.
 - Integrate results into an analysis application, keeping device provenance and confirmed units.
-- Add a dedicated EEG database schema; the existing EmotiBit bridge stores EDA, not EEG.
+- Join `eeg_record` with the EmotiBit `biometric_sample` table on time to compare EDA and EEG from the same session.
 
 ## Resources
 

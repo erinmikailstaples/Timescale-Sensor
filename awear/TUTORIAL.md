@@ -215,7 +215,38 @@ A peak near 10 Hz describes frequency power. It does not prove relaxation,
 attention, emotion, a sleep stage, or a diagnosis. Eye movement, muscle activity,
 motion, and poor contact can dominate a single-channel recording.
 
-## Lesson 11: Run Offline Tests
+## Lesson 11 (Optional): Upload the Export to Tiger Cloud
+
+Skip this lesson if you do not have a Tiger Cloud service yet.
+
+1. Add `DATABASE_URL=...` to `awear/.env`, copied from your service's
+   **Connect** panel.
+2. Preview what would be uploaded:
+
+   ```bash
+   uv run python awear/upload_to_tiger.py awear/exports/tutorial-eeg.csv --units uV
+   ```
+
+   Replace `uV` with the unit you confirmed in Lesson 8.
+3. Create the table and upload:
+
+   ```bash
+   uv run python awear/upload_to_tiger.py awear/exports/tutorial-eeg.csv --units uV --create-schema --write
+   ```
+
+4. In the SQL editor, confirm the rows arrived:
+
+   ```sql
+   SELECT count(*) AS seconds_of_eeg FROM eeg_record;
+   ```
+
+Success checkpoint: the count matches the record count printed in step 2. Run
+step 3 a second time and notice `already_present` equals the full count: the
+upload is idempotent.
+
+For the storage layout and more queries, read Step 5 of [`README.md`](README.md).
+
+## Lesson 12: Run Offline Tests
 
 ```bash
 uv run python -m unittest discover -s awear -p 'test_*.py' -v
@@ -226,7 +257,7 @@ use your API key or request paid data.
 
 Expected final result: `OK`.
 
-## Lesson 12: Review or Remove Tutorial Files
+## Lesson 13: Review or Remove Tutorial Files
 
 The tutorial created:
 
@@ -237,6 +268,9 @@ The tutorial created:
 The exports directory is ignored by Git, but the files still contain sensitive
 local data. Move them into approved storage or delete the three exact files when
 they are no longer required. Verify their names before deletion.
+
+If you completed Lesson 11, the rows in Tiger Cloud remain until you delete
+them. See "Removing an upload" in [`README.md`](README.md).
 
 ## Challenge Exercises
 
